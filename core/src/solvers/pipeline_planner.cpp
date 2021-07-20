@@ -51,8 +51,8 @@ namespace solvers {
 struct PlannerCache
 {
 	using PlannerID = std::tuple<std::string, std::string>;
-	using PlannerMap = std::map<PlannerID, std::weak_ptr<planning_pipeline::PlanningPipeline> >;
-	using ModelList = std::list<std::pair<std::weak_ptr<const robot_model::RobotModel>, PlannerMap> >;
+	using PlannerMap = std::map<PlannerID, std::weak_ptr<planning_pipeline::PlanningPipeline>>;
+	using ModelList = std::list<std::pair<std::weak_ptr<const robot_model::RobotModel>, PlannerMap>>;
 	ModelList cache_;
 
 	PlannerMap::mapped_type& retrieve(const robot_model::RobotModelConstPtr& model, const PlannerID& id) {
@@ -111,7 +111,11 @@ PipelinePlanner::PipelinePlanner(const std::string& pipeline_name) : pipeline_na
 
 	p.declare<double>("goal_joint_tolerance", 1e-4, "tolerance for reaching joint goals");
 	p.declare<double>("goal_position_tolerance", 1e-4, "tolerance for reaching position goals");
-	p.declare<double>("goal_orientation_tolerance", 1e-4, "tolerance for reaching orientation goals");
+	p.declare<double>("goal_orientation_tolerance", 1e-3, "tolerance for reaching orientation goals");
+	p.declare<std::vector<double>>("goal_position_tolerance_xyz", { 1e-4, 1e-4, 1e-4 },
+	                               "tolerance for reaching position goals");
+	p.declare<std::vector<double>>("goal_orientation_tolerance_xyz", { 1e-3, 1e-3, 1e-3 },
+	                               "tolerance for reaching orientation goals");
 
 	p.declare<bool>("display_motion_plans", false,
 	                "publish generated solutions on topic " + planning_pipeline::PlanningPipeline::DISPLAY_PATH_TOPIC);
@@ -184,9 +188,14 @@ bool PipelinePlanner::plan(const planning_scene::PlanningSceneConstPtr& from, co
 	tf::poseEigenToMsg(target_eigen, target.pose);
 
 	req.goal_constraints.resize(1);
-	req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(
-	    link.getName(), target, props.get<double>("goal_position_tolerance"),
-	    props.get<double>("goal_orientation_tolerance"));
+	if (props.get<double>("goal_position_tolerance") > 0.0 && props.get<double>("goal_orientation_tolerance") > 0.0)
+		req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(
+		    link.getName(), target, props.get<double>("goal_position_tolerance"),
+		    props.get<double>("goal_orientation_tolerance"));
+	else
+		req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(
+		    link.getName(), target, props.get<std::vector<double>>("goal_position_tolerance_xyz"),
+		    props.get<std::vector<double>>("goal_orientation_tolerance_xyz"));
 	req.path_constraints = path_constraints;
 
 	::planning_interface::MotionPlanResponse res;
