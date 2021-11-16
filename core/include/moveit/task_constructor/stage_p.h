@@ -43,6 +43,8 @@
 #include <moveit/task_constructor/cost_terms.h>
 #include <moveit/task_constructor/cost_queue.h>
 
+#include <ros/console.h>
+
 #include <ostream>
 #include <chrono>
 
@@ -148,8 +150,13 @@ public:
 	void newSolution(const SolutionBasePtr& solution);
 	bool storeFailures() const { return introspection_ != nullptr; }
 	void runCompute() {
+		ROS_DEBUG_STREAM_NAMED("Stage", "Computing stage '" << name() << "'");
 		auto compute_start_time = std::chrono::steady_clock::now();
-		compute();
+		try {
+			compute();
+		} catch (const Property::error& e) {
+			me()->reportPropertyError(e);
+		}
 		auto compute_stop_time = std::chrono::steady_clock::now();
 		total_compute_time_ += compute_stop_time - compute_start_time;
 	}

@@ -114,19 +114,24 @@ void ContainerBasePrivate::onNewFailure(const Stage& child, const InterfaceState
 			break;
 
 		case PROPAGATE_FORWARDS:  // mark from as failed (backwards)
-			setStatus<Interface::BACKWARD>(from, InterfaceState::Status::DISABLED_FAILED);
+			setStatus<Interface::BACKWARD>(from, InterfaceState::Status::FAILED);
 			break;
 		case PROPAGATE_BACKWARDS:  // mark to as failed (forwards)
-			setStatus<Interface::FORWARD>(to, InterfaceState::Status::DISABLED_FAILED);
+			setStatus<Interface::FORWARD>(to, InterfaceState::Status::FAILED);
 			break;
 
 		case CONNECT:
 			if (const Connecting* conn = dynamic_cast<const Connecting*>(&child)) {
 				auto cimpl = conn->pimpl();
-				if (!cimpl->hasPendingOpposites<Interface::FORWARD>(from))
-					setStatus<Interface::BACKWARD>(from, InterfaceState::Status::DISABLED_FAILED);
-				if (!cimpl->hasPendingOpposites<Interface::BACKWARD>(to))
-					setStatus<Interface::FORWARD>(to, InterfaceState::Status::DISABLED_FAILED);
+				ROS_DEBUG_STREAM_NAMED("Connecting", "'" << child.name() << "' generated a failure");
+				if (!cimpl->hasPendingOpposites<Interface::FORWARD>(from)) {
+					ROS_DEBUG_STREAM_NAMED("Connecting", "prune backward branch");
+					setStatus<Interface::BACKWARD>(from, InterfaceState::Status::FAILED);
+				}
+				if (!cimpl->hasPendingOpposites<Interface::BACKWARD>(to)) {
+					ROS_DEBUG_STREAM_NAMED("Connecting", "prune forward branch");
+					setStatus<Interface::FORWARD>(to, InterfaceState::Status::FAILED);
+				}
 			}
 			break;
 	}
@@ -139,7 +144,7 @@ void ContainerBasePrivate::setStatus(const InterfaceState* s, InterfaceState::St
 		return;  // nothing changing
 
 	// if we should disable the state, only do so when there is no enabled alternative path
-	if (status == InterfaceState::DISABLED) {
+	if (status == InterfaceState::PRUNED) {
 		auto solution_is_enabled = [](auto&& solution) {
 			return state<opposite<dir>()>(*solution)->priority().enabled();
 		};
@@ -157,26 +162,28 @@ void ContainerBasePrivate::setStatus(const InterfaceState* s, InterfaceState::St
 	}
 
 	// if possible (i.e. if state s has an external counterpart), escalate setStatus to external interface
-	if (parent()) {
+	if (parent() && trajectories<dir>(*s).empty()) {
 		auto external{ internalToExternalMap().find(s) };
-		if (external != internalToExternalMap().end()) {
-			// only escalate if there is no enabled alternative child
-			auto internals{ externalToInternalMap().equal_range(external->second) };
-			auto is_enabled = [](auto&& state_pair) { return state_pair.second->priority().enabled(); };
+		if (external != internalToExternalMap().end()) {  // do we have an external state?
+			// only escalate if there is no other *enabled* internal state connected to the same external one
+			// all internal states linked to external
+			auto internals{ externalToInternalMap().equal_range(external->get<EXTERNAL>()) };
+			auto is_enabled = [](const auto& ext_int_pair) { return ext_int_pair.second->priority().enabled(); };
 			auto other_path{ std::find_if(internals.first, internals.second, is_enabled) };
 			if (other_path == internals.second)
-				parent()->pimpl()->setStatus<dir>(external->second, status);
+				parent()->pimpl()->setStatus<dir>(external->get<EXTERNAL>(), status);
 			return;
 		}
 	}
 
 	// To break symmetry between both ends of a partial solution sequence that gets disabled,
-	// we mark the first state with DISABLED_FAILED and all other states down the tree only with DISABLED.
-	// This allows us to re-enable the FAILED side, while not (yet) consider the DISABLED states again,
+	// we mark the first state with FAILED and all other states down the tree only with PRUNED.
+	// This allows us to re-enable the FAILED side, while not (yet) consider the PRUNED states again,
 	// when new states arrive in a Connecting stage.
-	// All DISABLED states are only re-enabled if the FAILED state actually gets connected.
-	if (status == InterfaceState::DISABLED_FAILED)
-		status = InterfaceState::DISABLED;  // only the first state is marked as FAILED
+	// All PRUNED states are only re-enabled if the FAILED state actually gets connected.
+	// For details, see: https://github.com/ros-planning/moveit_task_constructor/pull/221
+	if (status == InterfaceState::Status::FAILED)
+		status = InterfaceState::Status::PRUNED;  // only the first state is marked as FAILED
 
 	// traverse solution tree
 	for (const SolutionBase* successor : trajectories<dir>(*s))
@@ -636,15 +643,9 @@ bool SerialContainer::canCompute() const {
 
 void SerialContainer::compute() {
 	for (const auto& stage : pimpl()->children()) {
-		try {
-			if (!stage->pimpl()->canCompute())
-				continue;
-
-			ROS_DEBUG("Computing stage '%s'", stage->name().c_str());
-			stage->pimpl()->runCompute();
-		} catch (const Property::error& e) {
-			stage->reportPropertyError(e);
-		}
+		if (!stage->pimpl()->canCompute())
+			continue;
+		stage->pimpl()->runCompute();
 	}
 }
 
@@ -775,11 +776,7 @@ bool WrapperBase::canCompute() const {
 }
 
 void WrapperBase::compute() {
-	try {
-		wrapped()->pimpl()->runCompute();
-	} catch (const Property::error& e) {
-		wrapped()->reportPropertyError(e);
-	}
+	wrapped()->pimpl()->runCompute();
 }
 
 bool Alternatives::canCompute() const {
@@ -791,11 +788,7 @@ bool Alternatives::canCompute() const {
 
 void Alternatives::compute() {
 	for (const auto& stage : pimpl()->children()) {
-		try {
-			stage->pimpl()->runCompute();
-		} catch (const Property::error& e) {
-			stage->reportPropertyError(e);
-		}
+		stage->pimpl()->runCompute();
 	}
 }
 
@@ -834,11 +827,7 @@ void Fallbacks::compute() {
 	if (!active_child_)
 		return;
 
-	try {
-		active_child_->pimpl()->runCompute();
-	} catch (const Property::error& e) {
-		active_child_->reportPropertyError(e);
-	}
+	active_child_->pimpl()->runCompute();
 }
 
 void Fallbacks::onNewSolution(const SolutionBase& s) {
@@ -888,11 +877,7 @@ bool Merger::canCompute() const {
 
 void Merger::compute() {
 	for (const auto& stage : pimpl()->children()) {
-		try {
-			stage->pimpl()->runCompute();
-		} catch (const Property::error& e) {
-			stage->reportPropertyError(e);
-		}
+		stage->pimpl()->runCompute();
 	}
 }
 

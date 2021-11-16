@@ -106,8 +106,10 @@ void Interface::add(InterfaceState& state) {
 		it->priority_ = InterfaceState::Priority(1, state.incomingTrajectories().front()->cost());
 	else if (!state.outgoingTrajectories().empty())
 		it->priority_ = InterfaceState::Priority(1, state.outgoingTrajectories().front()->cost());
-	else  // otherwise, assume priority was well defined before
-		assert(it->priority_.enabled() && it->priority_.depth() >= 1u);
+	else {  // otherwise, assume priority was well defined before
+		assert(it->priority_.enabled());
+		assert(it->priority_.depth() >= 1u);
+	}
 
 	// move list node into interface's state list (sorted by priority)
 	moveFrom(it, container);
@@ -146,8 +148,8 @@ std::ostream& operator<<(std::ostream& os, const InterfaceState::Priority& prio)
 	// maps InterfaceState::Status values to output (color-changing) prefix
 	static const char* prefix[] = {
 		"\033[32me:",  // ENABLED - green
-		"\033[33md:",  // DISABLED - yellow
-		"\033[31mf:",  // DISABLED_FAILED - red
+		"\033[33md:",  // PRUNED - yellow
+		"\033[31mf:",  // FAILED - red
 	};
 	static const char* color_reset = "\033[m";
 	os << prefix[prio.status()] << prio.depth() << ":" << prio.cost() << color_reset;

@@ -37,13 +37,15 @@
 #include <moveit/task_constructor/stages/generate_place_pose.h>
 #include <moveit/task_constructor/storage.h>
 #include <moveit/task_constructor/marker_tools.h>
+
 #include <rviz_marker_tools/marker_creation.h>
+
 #include <moveit/planning_scene/planning_scene.h>
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/attached_body.h>
 
 #include <Eigen/Geometry>
-#include <eigen_conversions/eigen_msg.h>
+#include <tf2_eigen/tf2_eigen.h>
 
 namespace moveit {
 namespace task_constructor {
@@ -63,7 +65,7 @@ void GeneratePlacePose::onNewSolution(const SolutionBase& s) {
 	std::string msg;
 	if (!scene->getCurrentState().hasAttachedBody(object))
 		msg = "'" + object + "' is not an attached object";
-	if (scene->getCurrentState().getAttachedBody(object)->getFixedTransforms().empty())
+	if (scene->getCurrentState().getAttachedBody(object)->getShapes().empty())
 		msg = "'" + object + "' has no associated shapes";
 	if (!msg.empty()) {
 		if (storeFailures()) {
@@ -95,13 +97,13 @@ void GeneratePlacePose::compute() {
 
 	const geometry_msgs::PoseStamped& pose_msg = props.get<geometry_msgs::PoseStamped>("pose");
 	Eigen::Isometry3d target_pose;
-	tf::poseMsgToEigen(pose_msg.pose, target_pose);
+	tf2::fromMsg(pose_msg.pose, target_pose);
 	// target pose w.r.t. planning frame
 	scene->getTransforms().transformPose(pose_msg.header.frame_id, target_pose, target_pose);
 
 	const geometry_msgs::PoseStamped& ik_frame_msg = props.get<geometry_msgs::PoseStamped>("ik_frame");
 	Eigen::Isometry3d ik_frame;
-	tf::poseMsgToEigen(ik_frame_msg.pose, ik_frame);
+	tf2::fromMsg(ik_frame_msg.pose, ik_frame);
 	ik_frame = robot_state.getGlobalLinkTransform(ik_frame_msg.header.frame_id) * ik_frame;
 	Eigen::Isometry3d object_to_ik = orig_object_pose.inverse() * ik_frame;
 
@@ -121,7 +123,7 @@ void GeneratePlacePose::compute() {
 				// target ik_frame's pose w.r.t. planning frame
 				geometry_msgs::PoseStamped target_pose_msg;
 				target_pose_msg.header.frame_id = scene->getPlanningFrame();
-				tf::poseEigenToMsg(object * object_to_ik, target_pose_msg.pose);
+				target_pose_msg.pose = tf2::toMsg(object * object_to_ik);
 
 				InterfaceState state(scene);
 				forwardProperties(*s.end(), state);  // forward properties from inner solutions
